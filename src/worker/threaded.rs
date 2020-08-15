@@ -20,6 +20,9 @@ impl Worker for ThreadedWorker {
         let (tx, rx) = mpsc::channel();
 
         thread_builder.spawn(move || {
+            #[cfg(feature = "coz")]
+            coz::thread_init();
+            
             let mut worker = ImmediateWorker::new_immediate();
 
             while let Ok(message) = rx.recv() {
