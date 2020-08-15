@@ -1,0 +1,14 @@
+[package]
+name = "jpeg-coz"
+version = "0.1.0"
+authors = ["Sergey \"Shnatsel\" Davidoff <shnatsel@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+jpeg-decoder = {path = "..", default-features=false, features = ["coz"]}
+coz = "0.1"
+
+[profile.release]
+debug = 1
