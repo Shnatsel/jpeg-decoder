@@ -1,5 +1,5 @@
 use byteorder::{BigEndian, ReadBytesExt};
-use error::{Error, Result};
+use error::{Error, Result, UnsupportedFeature};
 use huffman::{HuffmanTable, HuffmanTableClass};
 use marker::Marker;
 use marker::Marker::*;
@@ -83,17 +83,19 @@ pub enum AdobeColorTransform {
 }
 
 impl FrameInfo {
-    pub(crate) fn update_idct_size(&mut self, idct_size: usize) {
+    pub(crate) fn update_idct_size(&mut self, idct_size: usize) -> Result<()> {
         for component in &mut self.components {
             component.dct_scale = idct_size;
         }
 
-        update_component_sizes(self.image_size, &mut self.components);
+        update_component_sizes(self.image_size, &mut self.components)?;
 
         self.output_size = Dimensions {
             width: (self.image_size.width as f32 * idct_size as f32 / 8.0).ceil() as u16,
             height: (self.image_size.height as f32 * idct_size as f32 / 8.0).ceil() as u16
         };
+
+        Ok(())
     }
 }
 
@@ -169,6 +171,9 @@ pub fn parse_sof<R: Read>(reader: &mut R, marker: Marker) -> Result<FrameInfo> {
     // height:
     // "Value 0 indicates that the number of lines shall be defined by the DNL marker and
     //     parameters at the end of the first scan (see B.2.5)."
+    if height == 0 {
+        return Err(Error::Unsupported(UnsupportedFeature::DNL));
+    }
 
     if width == 0 {
         return Err(Error::Format("zero width in frame header".to_owned()));
@@ -225,7 +230,7 @@ pub fn parse_sof<R: Read>(reader: &mut R, marker: Marker) -> Result<FrameInfo> {
         });
     }
 
-    let mcu_size = update_component_sizes(Dimensions { width, height }, &mut components);
+    let mcu_size = update_component_sizes(Dimensions { width, height }, &mut components)?;
 
     Ok(FrameInfo {
         is_baseline: is_baseline,
@@ -241,29 +246,33 @@ pub fn parse_sof<R: Read>(reader: &mut R, marker: Marker) -> Result<FrameInfo> {
 }
 
 /// Returns ceil(x/y), requires x>0
-fn ceil_div(x: u32, y: u32) -> u16 {
-    assert!(x>0 && y>0, "invalid dimensions");
-    (1 + ((x - 1) / y)) as u16
+fn ceil_div(x: u32, y: u32) -> Result<u16> {
+    if x == 0 || y == 0 {
+        // TODO Determine how this error is reached. Can we validate input
+        // earlier and error out then?
+        return Err(Error::Format("invalid dimensions".to_owned()));
+    }
+    Ok((1 + ((x - 1) / y)) as u16)
 }
 
-fn update_component_sizes(size: Dimensions, components: &mut [Component]) -> Dimensions {
+fn update_component_sizes(size: Dimensions, components: &mut [Component]) -> Result<Dimensions> {
     let h_max = components.iter().map(|c| c.horizontal_sampling_factor).max().unwrap() as u32;
     let v_max = components.iter().map(|c| c.vertical_sampling_factor).max().unwrap() as u32;
 
     let mcu_size = Dimensions {
-        width: ceil_div(size.width as u32, h_max * 8),
-        height: ceil_div(size.height as u32, v_max * 8),
+        width: ceil_div(size.width as u32, h_max * 8)?,
+        height: ceil_div(size.height as u32, v_max * 8)?,
     };
 
     for component in components {
-        component.size.width = ceil_div(size.width as u32 * component.horizontal_sampling_factor as u32 * component.dct_scale as u32, h_max * 8);
-        component.size.height = ceil_div(size.height as u32 * component.vertical_sampling_factor as u32 * component.dct_scale as u32, v_max * 8);
+        component.size.width = ceil_div(size.width as u32 * component.horizontal_sampling_factor as u32 * component.dct_scale as u32, h_max * 8)?;
+        component.size.height = ceil_div(size.height as u32 * component.vertical_sampling_factor as u32 * component.dct_scale as u32, v_max * 8)?;
 
         component.block_size.width = mcu_size.width * component.horizontal_sampling_factor as u16;
         component.block_size.height = mcu_size.height * component.vertical_sampling_factor as u16;
     }
 
-    mcu_size
+    Ok(mcu_size)
 }
 
 #[test]
@@ -279,7 +288,7 @@ fn test_update_component_sizes() {
     }];
     let mcu = update_component_sizes(
         Dimensions { width: 800, height: 280 },
-        &mut components);
+        &mut components).unwrap();
     assert_eq!(mcu, Dimensions { width: 50, height: 18 });
     assert_eq!(components[0].block_size, Dimensions { width: 100, height: 36 });
     assert_eq!(components[0].size, Dimensions { width: 800, height: 280 });
@@ -428,8 +437,8 @@ pub fn parse_dqt<R: Read>(reader: &mut R) -> Result<[Option<[u16; 64]>; 4]> {
 
         let mut table = [0u16; 64];
 
-        for i in 0 .. 64 {
-            table[i] = match precision {
+        for item in table.iter_mut() {
+            *item = match precision {
                 0 => reader.read_u8()? as u16,
                 1 => reader.read_u16::<BigEndian>()?,
                 _ => unreachable!(),
