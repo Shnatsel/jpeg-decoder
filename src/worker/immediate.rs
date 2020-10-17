@@ -32,7 +32,8 @@ impl ImmediateWorker {
     }
     pub fn append_row_immediate(&mut self, (index, data): (usize, Vec<i16>)) {
         //#[cfg(feature = "coz")]
-        coz::scope!("append_row_immediate");
+        //coz::scope!("append_row_immediate");
+        //panic!("oh noes");
         // Convert coefficients from a MCU row to samples.
         let component = self.components[index].as_ref().unwrap();
         let quantization_table = self.quantization_tables[index].as_ref().unwrap();
