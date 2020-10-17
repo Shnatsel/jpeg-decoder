@@ -18,10 +18,10 @@ fn main() {
     let mut input_data: Vec<u8> = Vec::new();
     let mut reader = BufReader::new(input_file);
     reader.read_to_end(&mut input_data).unwrap();
-    for _ in 1..1000 {
+    for _ in 1..5000 {
         coz::scope!("decode");
         let mut decoder = jpeg::Decoder::new(Cursor::new( &mut input_data));
-        let mut data = decoder.decode().expect("Decoding failed. If other software can successfully decode the specified JPEG image, then it's likely that there is a bug in jpeg-decoder");
+        let _data = decoder.decode().expect("Decoding failed. If other software can successfully decode the specified JPEG image, then it's likely that there is a bug in jpeg-decoder");
     }
     //let info = decoder.info().unwrap();
 }
