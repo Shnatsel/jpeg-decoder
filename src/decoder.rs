@@ -861,6 +861,7 @@ fn compute_image_parallel(components: &[Component],
     let mut image = vec![0u8; line_size * output_size.height as usize];
     let (tx, rx) = flume::unbounded();
     let cpus = num_cpus::get();
+    let rows_per_batch = 4; // TODO: choose heuristically instead of hardcoding
 
     crossbeam_utils::thread::scope(|s| {
         for _ in 0..cpus {
@@ -883,8 +884,6 @@ fn compute_image_parallel(components: &[Component],
                 }
             });
         }
-
-        let rows_per_batch = 4;
 
         for (row, batch) in image.chunks_mut(line_size * rows_per_batch).enumerate() {
             tx.send(WorkerMsg::ProcessRows(
