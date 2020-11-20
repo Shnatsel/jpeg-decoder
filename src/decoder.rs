@@ -843,7 +843,7 @@ fn compute_image_parallel(components: &[Component],
                           output_size: Dimensions,
                           is_jfif: bool,
                           color_transform: Option<AdobeColorTransform>) -> Result<Vec<u8>> {
-    // This *looks* scrary and complicated, but it's mostly due to boilerplate.
+    // This *looks* scrary and complicated, but that's mostly due to boilerplate.
     // What this does is actually very simple: spawn a bunch of threads
     // and feed them chunks of the input over a single-producer-multiple-consumers channel.
     //
@@ -853,11 +853,18 @@ fn compute_image_parallel(components: &[Component],
     //
     // All communication is in one direction because the worker threads modify the data
     // directly in `image` vector, without the need to send anything back.
+    //
+    // This can be implemented much more succinctly using Rayon, but Rayon depends on
+    // a large amount of lock-free unsafe code, which is notoriously hard to get right
+    // and pulls some dubious tricks, e.g. https://github.com/rayon-rs/rayon/issues/812
+    // It is *probably* fine, but anyone who's OK with "probably fine" is using libjpeg-turbo.
+    // The value proposition of a JPEG decoder in Rust is memory safety, so we cannot compomise on it.
 
     let color_convert_func = choose_color_convert_func(components.len(), is_jfif, color_transform)?;
     let line_size = output_size.width as usize * components.len();
-    // FIXME: writing to a single contiguous output vector will result in a lot of false sharing
-    // for small images. We'll need to mitigate that somehow.
+    // This looks like it would be false sharing central, but in practice it's surprisingly good.
+    // I could not force any performance degradation due to false sharing, despite trying.
+    // Apparently batching mitigates it really well.
     let mut image = vec![0u8; line_size * output_size.height as usize];
     let (tx, rx) = flume::unbounded();
     let cpus = num_cpus::get();
