@@ -843,38 +843,49 @@ fn compute_image_parallel(components: &[Component],
                           output_size: Dimensions,
                           is_jfif: bool,
                           color_transform: Option<AdobeColorTransform>) -> Result<Vec<u8>> {
+    // This *looks* scrary and complicated, but it's mostly due to boilerplate.
+    // What this does is actually very simple: spawn a bunch of threads
+    // and feed them chunks of the input over a single-producer-multiple-consumers channel.
+    //
+    // All communication is in one direction because the worker threads modify the data
+    // directly in `image` vector, without the need to send anything back over channels.
 
     let color_convert_func = choose_color_convert_func(components.len(), is_jfif, color_transform)?;
-
     let line_size = output_size.width as usize * components.len();
     // FIXME: writing to a single contiguous output vector will result in a lot of false sharing
     // for small images. We'll need to mitigate that somehow.
     let mut image = vec![0u8; line_size * output_size.height as usize];
-
     let (tx, rx) = flume::unbounded();
 
     crossbeam_utils::thread::scope(|s| {
         s.spawn(move |_| {
-            let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap();
+            let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap(); // FIXME
             while let Ok(message) = rx.recv() {
                 match message {
                     WorkerMsg::ProcessRow(data, row, output_width, line) => {
                         upsampler.upsample_and_interleave_row(data, row, output_width, line);
                         color_convert_func(line);
-                    },
+                    }
                     WorkerMsg::Terminate => {
                         break;
-                    },
+                    }
                 }
             }
         });
-    });
-    
-    for (row, line) in image.chunks_exact_mut(line_size).enumerate() {
-            tx.send(WorkerMsg::ProcessRow(&data, row, output_size.width as usize, line));
-        };
+    }).unwrap(); //FIXME
 
-    drop(tx); // to please the borrow checker
+    for (row, line) in image.chunks_exact_mut(line_size).enumerate() {
+        tx.send(WorkerMsg::ProcessRow(
+            &data,
+            row,
+            output_size.width as usize,
+            line,
+        )).unwrap(); // FIXME
+    }
+
+    tx.send(WorkerMsg::Terminate).unwrap(); //FIXME
+
+    drop(tx); // pleases the borrow checker, otherwise it complains about drop order
     Ok(image)
 }
 
