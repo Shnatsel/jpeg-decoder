@@ -852,7 +852,7 @@ fn compute_image_parallel(components: &[Component],
     // instead of reading from the channel. This also reduces lock contention in the channel.
     //
     // All communication is in one direction because the worker threads modify the data
-    // directly in `image` vector, without the need to send anything back.
+    // directly in `output` vector, without the need to send anything back.
     //
     // This can be implemented much more succinctly using Rayon, but Rayon depends on
     // a large amount of lock-free unsafe code, which is notoriously hard to get right
@@ -865,7 +865,7 @@ fn compute_image_parallel(components: &[Component],
     // This looks like it would be false sharing central, but in practice it's surprisingly good.
     // I could not force any performance degradation due to false sharing, despite trying.
     // Apparently batching mitigates it really well.
-    let mut image = vec![0u8; line_size * output_size.height as usize];
+    let mut output = vec![0u8; line_size * output_size.height as usize];
     let (tx, rx) = flume::unbounded();
     let cpus = num_cpus::get();
     let rows_per_batch = 4; // TODO: choose heuristically instead of hardcoding
@@ -892,7 +892,7 @@ fn compute_image_parallel(components: &[Component],
             });
         }
 
-        for (row, batch) in image.chunks_mut(line_size * rows_per_batch).enumerate() {
+        for (row, batch) in output.chunks_mut(line_size * rows_per_batch).enumerate() {
             tx.send(WorkerMsg::ProcessRows(
                 &data,
                 row * rows_per_batch,
@@ -907,7 +907,7 @@ fn compute_image_parallel(components: &[Component],
 
     drop(rx);
     drop(tx); // pleases the borrow checker, otherwise it complains about drop order
-    Ok(image)
+    Ok(output)
 }
 
 #[cfg(feature="rayon")]
@@ -927,15 +927,15 @@ fn compute_image_parallel(components: &[Component],
     let color_convert_func = choose_color_convert_func(components.len(), is_jfif, color_transform)?;
     let upsampler = Upsampler::new(components, output_size.width, output_size.height)?;
     let line_size = output_size.width as usize * components.len();
-    let mut image = vec![0u8; line_size * output_size.height as usize];
+    let mut output = vec![0u8; line_size * output_size.height as usize];
 
-    for (row, line) in image.chunks_mut(line_size)
+    for (row, line) in output.chunks_mut(line_size)
          .enumerate() {
              upsampler.upsample_and_interleave_row(&data, row, output_size.width as usize, line);
              color_convert_func(line);
          }
 
-    Ok(image)
+    Ok(output)
 }
 
 fn choose_color_convert_func(component_count: usize,
