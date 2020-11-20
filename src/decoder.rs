@@ -861,29 +861,20 @@ fn compute_image_parallel(components: &[Component],
     let mut image = vec![0u8; line_size * output_size.height as usize];
     let (tx, rx) = flume::unbounded();
     let cpus = num_cpus::get();
-    let rows_per_batch = 1;
 
     crossbeam_utils::thread::scope(|s| {
         for _ in 0..cpus {
             s.spawn(|_| {
                 let my_rx = rx.clone();
                 let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap(); // FIXME
-                // Use a buffer allocated in the thread for all operations and only copy the result to main thread at the end
-                // to reduce false sharing
-                let mut batch_buffer = vec![0u8; line_size * rows_per_batch];
                 while let Ok(message) = my_rx.recv() {
                     match message {
                         WorkerMsg::ProcessRows(data, first_row_of_batch, output_width, batch) => {
-                            // The last batch may have less rows than `rows_per_batch`, handle that
-                            let batch_buffer = &mut batch_buffer[0..batch.len()];
-                            // Process the rows
-                            for (row_in_batch, line) in batch_buffer.chunks_exact_mut(line_size).enumerate() {
+                            for (row_in_batch, line) in batch.chunks_exact_mut(line_size).enumerate() {
                                 let row = first_row_of_batch + row_in_batch;
                                 upsampler.upsample_and_interleave_row(data, row, output_width, line);
                                 color_convert_func(line);
                             }
-                            // Copy results back to the main thread
-                            batch.copy_from_slice(batch_buffer);
                         }
                         WorkerMsg::Terminate => {
                             break;
@@ -892,6 +883,8 @@ fn compute_image_parallel(components: &[Component],
                 }
             });
         }
+
+        let rows_per_batch = 4;
 
         for (row, batch) in image.chunks_mut(line_size * rows_per_batch).enumerate() {
             tx.send(WorkerMsg::ProcessRows(
