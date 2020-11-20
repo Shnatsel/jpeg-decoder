@@ -856,22 +856,26 @@ fn compute_image_parallel(components: &[Component],
     // for small images. We'll need to mitigate that somehow.
     let mut image = vec![0u8; line_size * output_size.height as usize];
     let (tx, rx) = flume::unbounded();
+    let cpus = num_cpus::get();
 
     crossbeam_utils::thread::scope(|s| {
-        s.spawn(move |_| {
-            let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap(); // FIXME
-            while let Ok(message) = rx.recv() {
-                match message {
-                    WorkerMsg::ProcessRow(data, row, output_width, line) => {
-                        upsampler.upsample_and_interleave_row(data, row, output_width, line);
-                        color_convert_func(line);
-                    }
-                    WorkerMsg::Terminate => {
-                        break;
+        for _ in 0..cpus {
+            s.spawn(|_| {
+                let my_rx = rx.clone();
+                let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap(); // FIXME
+                while let Ok(message) = my_rx.recv() {
+                    match message {
+                        WorkerMsg::ProcessRow(data, row, output_width, line) => {
+                            upsampler.upsample_and_interleave_row(data, row, output_width, line);
+                            color_convert_func(line);
+                        }
+                        WorkerMsg::Terminate => {
+                            break;
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
         for (row, line) in image.chunks_exact_mut(line_size).enumerate() {
             tx.send(WorkerMsg::ProcessRow(
@@ -881,10 +885,12 @@ fn compute_image_parallel(components: &[Component],
                 line,
             )).unwrap(); // FIXME
         }
-    
-        tx.send(WorkerMsg::Terminate).unwrap(); //FIXME
+        for _ in 0..cpus {
+            tx.send(WorkerMsg::Terminate).unwrap(); //FIXME
+        }
     }).unwrap(); //FIXME
 
+    drop(rx);
     drop(tx); // pleases the borrow checker, otherwise it complains about drop order
     Ok(image)
 }
