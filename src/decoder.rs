@@ -847,8 +847,12 @@ fn compute_image_parallel(components: &[Component],
     // What this does is actually very simple: spawn a bunch of threads
     // and feed them chunks of the input over a single-producer-multiple-consumers channel.
     //
+    // Each chunk consists of several rows (called a batch of rows in the code)
+    // so that the worker threads would be spending most of the time doing actual work
+    // instead of reading from the channel. This also reduces lock contention in the channel.
+    //
     // All communication is in one direction because the worker threads modify the data
-    // directly in `image` vector, without the need to send anything back over channels.
+    // directly in `image` vector, without the need to send anything back.
 
     let color_convert_func = choose_color_convert_func(components.len(), is_jfif, color_transform)?;
     let line_size = output_size.width as usize * components.len();
