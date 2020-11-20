@@ -872,18 +872,18 @@ fn compute_image_parallel(components: &[Component],
                 }
             }
         });
+
+        for (row, line) in image.chunks_exact_mut(line_size).enumerate() {
+            tx.send(WorkerMsg::ProcessRow(
+                &data,
+                row,
+                output_size.width as usize,
+                line,
+            )).unwrap(); // FIXME
+        }
+    
+        tx.send(WorkerMsg::Terminate).unwrap(); //FIXME
     }).unwrap(); //FIXME
-
-    for (row, line) in image.chunks_exact_mut(line_size).enumerate() {
-        tx.send(WorkerMsg::ProcessRow(
-            &data,
-            row,
-            output_size.width as usize,
-            line,
-        )).unwrap(); // FIXME
-    }
-
-    tx.send(WorkerMsg::Terminate).unwrap(); //FIXME
 
     drop(tx); // pleases the borrow checker, otherwise it complains about drop order
     Ok(image)
