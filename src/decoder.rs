@@ -867,11 +867,10 @@ fn compute_image_parallel(components: &[Component],
     // Apparently batching mitigates it really well.
     let mut output = vec![0u8; line_size * output_size.height as usize];
     let (tx, rx) = flume::unbounded();
-    let cpus = num_cpus::get();
-    let rows_per_batch = 4; // TODO: choose heuristically instead of hardcoding
+    let (threads, rows_per_batch) = choose_treads_and_batch_size(components, output_size);
 
     crossbeam_utils::thread::scope(|s| {
-        for _ in 0..cpus {
+        for _ in 0..threads {
             s.spawn(|_| {
                 let my_rx = rx.clone();
                 let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap(); // FIXME
@@ -900,7 +899,7 @@ fn compute_image_parallel(components: &[Component],
                 batch,
             )).unwrap(); // FIXME
         }
-        for _ in 0..cpus {
+        for _ in 0..threads {
             tx.send(WorkerMsg::Terminate).unwrap(); //FIXME
         }
     }).unwrap(); //FIXME
@@ -916,6 +915,48 @@ enum WorkerMsg<'a> {
     ProcessRows(&'a Vec<Vec<u8>>, usize, usize, &'a mut [u8]),
     /// Instructs the worker thread to terminate
     Terminate
+}
+
+/// Heuristically chooses the optimal number of worker threads and batch size
+/// Returns (threads, rows_per_batch)
+#[cfg(feature="rayon")]
+fn choose_treads_and_batch_size(components: &[Component], output_size: Dimensions) -> (usize, usize) {
+    // We have multiple concerns to balance:
+    // 1. Utilizing all available cores
+    // 2. Mitigating false sharing, i.e. different cores modifying the same cache line
+    // 3. Mitigating lock contention in the channel, i.e. different threads trying to read from the channel at the same time
+    // 4. Even distribution of load, so that we don't end up with one straggler thread holding up the process
+    // These concerns are in conflict with each other:
+    // smaller batches means spreading load to more cores and a more even load distribution, but also greater lock contention.
+    // So we employ a bunch of heuristics to find a middle ground.
+
+    fn divide_rounding_up(a: usize, b: usize) -> usize {
+        (a as f64 / b as f64).ceil() as usize
+    }
+
+    // This value was determined experimentally. Avoids false sharing and lock contention.
+    // If you optimize IDCT, you might have to increase this to avoid lock contention.
+    let min_bytes_per_batch = 65_536;
+
+    let bytes_per_row = usize::from(output_size.width) * components.len();
+    // How many rows it takes to reach the minimum batch size
+    let min_rows_per_batch = divide_rounding_up(min_bytes_per_batch, bytes_per_row);
+
+    let image_size = usize::from(output_size.width) * usize::from(output_size.height) * components.len();
+    let os_cpus = num_cpus::get();
+    // Check how many CPUs the image allows us to have while respecting `min_bytes_per_batch`
+    let max_cpus = divide_rounding_up(image_size, min_bytes_per_batch);
+    if max_cpus < os_cpus {
+        (max_cpus, min_rows_per_batch)
+    } else {
+        // We can use all CPUs the OS exposes.
+        // Let's see if we can increase the chunk size without introducing too much load imbalance
+        let max_chunks_per_thread = 64; // determined experimentally
+        let min_chunks = divide_rounding_up(image_size, min_bytes_per_batch);
+        let min_chunks_per_thread =  divide_rounding_up(min_chunks, os_cpus);
+        let desired_chunks_per_thread = cmp::min(max_chunks_per_thread, min_chunks_per_thread);
+        (os_cpus, desired_chunks_per_thread)
+    }
 }
 
 #[cfg(not(feature="rayon"))]
