@@ -928,30 +928,6 @@ fn compute_image_parallel(components: &[Component],
     Ok(image)
 }
 
-#[cfg(feature="old_rayon")]
-fn compute_image_parallel(components: &[Component],
-                          data: Vec<Vec<u8>>,
-                          output_size: Dimensions,
-                          is_jfif: bool,
-                          color_transform: Option<AdobeColorTransform>) -> Result<Vec<u8>> {
-    use rayon::prelude::*;
-
-    let color_convert_func = choose_color_convert_func(components.len(), is_jfif, color_transform)?;
-    let upsampler = Upsampler::new(components, output_size.width, output_size.height)?;
-    let line_size = output_size.width as usize * components.len();
-    let mut image = vec![0u8; line_size * output_size.height as usize];
-
-    image.par_chunks_mut(line_size)
-         .with_max_len(1)
-         .enumerate()
-         .for_each(|(row, line)| {
-             upsampler.upsample_and_interleave_row(&data, row, output_size.width as usize, line);
-             color_convert_func(line);
-         });
-
-    Ok(image)
- }
-
 fn choose_color_convert_func(component_count: usize,
                              _is_jfif: bool,
                              color_transform: Option<AdobeColorTransform>)
