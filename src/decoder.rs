@@ -5,7 +5,7 @@ use marker::Marker;
 use parser::{AdobeColorTransform, AppData, CodingProcess, Component, Dimensions, EntropyCoding, FrameInfo,
              parse_app, parse_com, parse_dht, parse_dqt, parse_dri, parse_sof, parse_sos, ScanInfo};
 use upsampler::Upsampler;
-use std::{cmp, thread};
+use std::cmp;
 use std::io::Read;
 use std::mem;
 use std::ops::Range;
@@ -845,20 +845,36 @@ fn compute_image_parallel(components: &[Component],
                           color_transform: Option<AdobeColorTransform>) -> Result<Vec<u8>> {
 
     let color_convert_func = choose_color_convert_func(components.len(), is_jfif, color_transform)?;
-    let (tx, rx) = flume::unbounded();
 
     let line_size = output_size.width as usize * components.len();
     // FIXME: writing to a single contiguous output vector will result in a lot of false sharing
     // for small images. We'll need to mitigate that somehow.
     let mut image = vec![0u8; line_size * output_size.height as usize];
 
+    let (tx, rx) = flume::unbounded();
+
+    crossbeam_utils::thread::scope(|s| {
+        s.spawn(move |_| {
+            let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap();
+            while let Ok(message) = rx.recv() {
+                match message {
+                    WorkerMsg::ProcessRow(data, row, output_width, line) => {
+                        upsampler.upsample_and_interleave_row(data, row, output_width, line);
+                        color_convert_func(line);
+                    },
+                    WorkerMsg::Terminate => {
+                        break;
+                    },
+                }
+            }
+        });
+    });
     
-    
-    for (row, line) in image.chunks_exact_mut(line_size)
-        .enumerate() {
+    for (row, line) in image.chunks_exact_mut(line_size).enumerate() {
             tx.send(WorkerMsg::ProcessRow(&data, row, output_size.width as usize, line));
         };
 
+    drop(tx); // to please the borrow checker
     Ok(image)
 }
 
@@ -869,30 +885,6 @@ enum WorkerMsg<'a> {
     /// Instructs the worker thread to terminate
     Terminate
 }
-
-#[cfg(feature="rayon")]
-fn spawn_worker_thread(components: Vec<Component>, output_size: Dimensions, color_convert_func: fn(&mut [u8]), rx: flume::Receiver<WorkerMsg>) -> Result<()> {
-    let _ = Upsampler::new(&components, output_size.width, output_size.height)?;
-    let thread_builder = thread::Builder::new();
-
-    thread_builder.spawn(move || {
-        let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap();
-        while let Ok(message) = rx.recv() {
-            match message {
-                WorkerMsg::ProcessRow(data, row, output_width, line) => {
-                    upsampler.upsample_and_interleave_row(data, row, output_width, line);
-                    color_convert_func(line);
-                },
-                WorkerMsg::Terminate => {
-                    break;
-                },
-            }
-        }
-    })?;
-
-    Ok(())
-}
-
 
 #[cfg(not(feature="rayon"))]
 fn compute_image_parallel(components: &[Component],
