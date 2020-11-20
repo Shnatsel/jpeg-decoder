@@ -865,9 +865,12 @@ fn compute_image_parallel(components: &[Component],
                 let upsampler = Upsampler::new(&components, output_size.width, output_size.height).unwrap(); // FIXME
                 while let Ok(message) = my_rx.recv() {
                     match message {
-                        WorkerMsg::ProcessRow(data, row, output_width, line) => {
-                            upsampler.upsample_and_interleave_row(data, row, output_width, line);
-                            color_convert_func(line);
+                        WorkerMsg::ProcessRows(data, first_row_of_batch, output_width, batch) => {
+                            for (row_in_batch, line) in batch.chunks_exact_mut(line_size).enumerate() {
+                                let row = first_row_of_batch + row_in_batch;
+                                upsampler.upsample_and_interleave_row(data, row, output_width, line);
+                                color_convert_func(line);
+                            }
                         }
                         WorkerMsg::Terminate => {
                             break;
@@ -877,12 +880,14 @@ fn compute_image_parallel(components: &[Component],
             });
         }
 
-        for (row, line) in image.chunks_exact_mut(line_size).enumerate() {
-            tx.send(WorkerMsg::ProcessRow(
+        let rows_per_batch = 4;
+
+        for (row, batch) in image.chunks_mut(line_size * rows_per_batch).enumerate() {
+            tx.send(WorkerMsg::ProcessRows(
                 &data,
-                row,
+                row * rows_per_batch,
                 output_size.width as usize,
-                line,
+                batch,
             )).unwrap(); // FIXME
         }
         for _ in 0..cpus {
@@ -897,8 +902,8 @@ fn compute_image_parallel(components: &[Component],
 
 #[cfg(feature="rayon")]
 enum WorkerMsg<'a> {
-    /// Carries the parameters that will be passed to `upsample_and_interleave_row`
-    ProcessRow(&'a Vec<Vec<u8>>, usize, usize, &'a mut [u8]),
+    /// Contains a batch of adjacent rows to be processed with `upsample_and_interleave_row` by the worker thread.
+    ProcessRows(&'a Vec<Vec<u8>>, usize, usize, &'a mut [u8]),
     /// Instructs the worker thread to terminate
     Terminate
 }
