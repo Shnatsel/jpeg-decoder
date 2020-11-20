@@ -30,8 +30,6 @@
 #![forbid(unsafe_code)]
 
 extern crate byteorder;
-#[cfg(feature="rayon")]
-extern crate rayon;
 
 pub use decoder::{Decoder, ImageInfo, PixelFormat};
 pub use error::{Error, UnsupportedFeature};
